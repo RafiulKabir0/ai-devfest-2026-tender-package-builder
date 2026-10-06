@@ -7,6 +7,14 @@ export const translations = {
     switchLanguage: 'বাংলায় পরিবর্তন করুন',
     currentLanguageName: 'English',
 
+    // Demo / Quick Start
+    demoBannerTitle: 'Contest Sample Pack & Quick Actions',
+    demoBannerDesc: 'Tender T-2026-0417 is loaded. You can load sample PDFs with 1-click or upload your own requirements & PDFs.',
+    loadSampleDocsBtn: 'Load Sample Documents (10 PDFs)',
+    autoMatchAndFillBtn: 'Auto-Match & Fill Dates',
+    loadingSampleDocs: 'Loading sample documents...',
+    resetBtn: 'Clear & Start Fresh',
+
     // Tender Section
     tenderInfoTitle: 'Tender Information',
     noTenderLoaded: 'No tender requirements file loaded yet. Please upload requirements.json below.',
@@ -15,7 +23,7 @@ export const translations = {
     procuringEntity: 'Procuring Entity',
     bidderName: 'Bidder Name',
     submissionDeadline: 'Submission Deadline',
-    loadRequirementsBtn: 'Load requirements.json',
+    loadRequirementsBtn: 'Upload requirements.json',
     replaceRequirementsBtn: 'Change requirements.json',
     dragOrClickJson: 'Drag & drop requirements.json or click to browse',
 
@@ -91,6 +99,14 @@ export const translations = {
     switchLanguage: 'Switch to English',
     currentLanguageName: 'বাংলা',
 
+    // Demo / Quick Start
+    demoBannerTitle: 'কনটেস্ট নমুনা প্যাক ও দ্রুত অ্যাকশন',
+    demoBannerDesc: 'টেন্ডার T-2026-0417 লোড করা হয়েছে। আপনি এক ক্লিকে নমুনা পিডিএফ লোড করতে পারেন অথবা নতুন ফাইল আপলোড করতে পারেন।',
+    loadSampleDocsBtn: 'নমুনা ফাইল লোড করুন (১০টি পিডিএফ)',
+    autoMatchAndFillBtn: 'স্বয়ংক্রিয় সংযুক্তি ও মেয়াদ পূরণ',
+    loadingSampleDocs: 'নমুনা ফাইল লোড হচ্ছে...',
+    resetBtn: 'সব রিসেট করুন',
+
     // Tender Section
     tenderInfoTitle: 'টেন্ডারের বিবরণ',
     noTenderLoaded: 'কোনো রিকোয়ারমেন্ট ফাইল এখনও লোড করা হয়নি। নিচে requirements.json নির্বাচন করুন।',
@@ -99,7 +115,7 @@ export const translations = {
     procuringEntity: 'ক্রয়কারী প্রতিষ্ঠান',
     bidderName: 'দরদাতা প্রতিষ্ঠান',
     submissionDeadline: 'জমা দেওয়ার শেষ সময়',
-    loadRequirementsBtn: 'requirements.json লোড করুন',
+    loadRequirementsBtn: 'requirements.json আপলোড করুন',
     replaceRequirementsBtn: 'requirements.json পরিবর্তন করুন',
     dragOrClickJson: 'requirements.json ফাইলটি টেনে এনে ছেড়ে দিন অথবা ক্লিক করুন',
 

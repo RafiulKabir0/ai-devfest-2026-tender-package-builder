@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { 
   FileText, 
   Upload, 
@@ -14,7 +14,9 @@ import {
   Layers, 
   FileCheck,
   AlertTriangle,
-  FolderOpen
+  FolderOpen,
+  RotateCcw,
+  Zap
 } from 'lucide-react';
 import { PDFDocument } from 'pdf-lib';
 import { 
@@ -26,20 +28,54 @@ import {
   RequirementStatus
 } from './types';
 import { calculateSha256 } from './utils/hash';
-import { calculateRequirementStatus, computeAllRequirementStates } from './utils/statusEngine';
+import { computeAllRequirementStates } from './utils/statusEngine';
 import { generatePackagePdf, IncludedDocumentItem } from './utils/pdfGenerator';
 import { translations } from './locales/translations';
 
 const MAX_FILES = 30;
 const MAX_TOTAL_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB
 
+const DEFAULT_TENDER: TenderInfo = {
+  tender_id: 'T-2026-0417',
+  title: 'Supply of IT Equipment',
+  procuring_entity: 'Directorate of Sample Services',
+  bidder: 'Meghna Tech Solutions Ltd.',
+  submission_deadline: '2026-10-20',
+};
+
+const DEFAULT_REQUIREMENTS: Requirement[] = [
+  { id: 'R01', order: 1, title_en: 'Trade License', title_bn: 'ট্রেড লাইসেন্স', mandatory: true, has_expiry: true },
+  { id: 'R02', order: 2, title_en: 'TIN Certificate', title_bn: 'টিআইএন সনদ', mandatory: true, has_expiry: false },
+  { id: 'R03', order: 3, title_en: 'VAT Registration Certificate', title_bn: 'ভ্যাট নিবন্ধন সনদ', mandatory: true, has_expiry: false },
+  { id: 'R04', order: 4, title_en: 'Bank Solvency Certificate', title_bn: 'ব্যাংক সচ্ছলতা সনদ', mandatory: true, has_expiry: true },
+  { id: 'R05', order: 5, title_en: 'Experience Certificate', title_bn: 'অভিজ্ঞতার সনদ', mandatory: true, has_expiry: false },
+  { id: 'R06', order: 6, title_en: 'Audited Financial Statement', title_bn: 'নিরীক্ষিত আর্থিক বিবরণী', mandatory: false, has_expiry: false },
+  { id: 'R07', order: 7, title_en: 'Manufacturer\'s Authorization', title_bn: 'প্রস্তুতকারকের অনুমোদনপত্র', mandatory: false, has_expiry: true },
+  { id: 'R08', order: 8, title_en: 'Technical Proposal', title_bn: 'কারিগরি প্রস্তাব', mandatory: true, has_expiry: false },
+  { id: 'R09', order: 9, title_en: 'Financial Proposal', title_bn: 'আর্থিক প্রস্তাব', mandatory: true, has_expiry: false },
+  { id: 'R10', order: 10, title_en: 'Signed Declaration', title_bn: 'স্বাক্ষরিত ঘোষণাপত্র', mandatory: true, has_expiry: false },
+];
+
+const SAMPLE_DOC_NAMES = [
+  '01_financial_proposal.pdf',
+  '02_technical_proposal.pdf',
+  '03_tin_certificate.pdf',
+  '04_vat_certificate.pdf',
+  'bank_solvency.pdf',
+  'experience_cert (1).pdf',
+  'experience_cert.pdf',
+  'scan_0042.pdf',
+  'trade_license_2025.pdf',
+  'trade_license_2026.pdf',
+];
+
 export const App: React.FC = () => {
   const [lang, setLang] = useState<Language>('en');
   const t = translations[lang];
 
-  // Tender & Requirements state
-  const [tender, setTender] = useState<TenderInfo | null>(null);
-  const [requirements, setRequirements] = useState<Requirement[]>([]);
+  // Tender & Requirements state - pre-populated with sample tender so it is never empty!
+  const [tender, setTender] = useState<TenderInfo | null>(DEFAULT_TENDER);
+  const [requirements, setRequirements] = useState<Requirement[]>(DEFAULT_REQUIREMENTS);
 
   // Uploaded files state
   const [uploadedFiles, setUploadedFiles] = useState<UploadedPdfFile[]>([]);
@@ -49,6 +85,9 @@ export const App: React.FC = () => {
 
   // Expiry dates state: requirementId -> YYYY-MM-DD
   const [expiryDates, setExpiryDates] = useState<Record<string, string>>({});
+
+  // Loading indicator for demo docs
+  const [isLoadingDemoDocs, setIsLoadingDemoDocs] = useState(false);
 
   // Toast / notification
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -69,7 +108,7 @@ export const App: React.FC = () => {
     }, 4500);
   };
 
-  // Safe requirements.json parser
+  // Safe requirements.json parser for arbitrary user-provided files
   const parseRequirementsJson = (jsonString: string) => {
     try {
       const parsed = JSON.parse(jsonString) as RequirementsConfig;
@@ -91,19 +130,6 @@ export const App: React.FC = () => {
     }
   };
 
-  // Handle requirements.json file selection
-  const handleJsonUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const content = event.target?.result as string;
-      if (content) parseRequirementsJson(content);
-    };
-    reader.readAsText(file);
-    e.target.value = '';
-  };
-
   // Compute duplicate status across all files
   const updateDuplicates = (files: UploadedPdfFile[]): UploadedPdfFile[] => {
     const hashCounts: Record<string, number> = {};
@@ -119,13 +145,121 @@ export const App: React.FC = () => {
     }));
   };
 
-  // Handle PDF file uploads
+  // Process raw buffers into UploadedPdfFiles
+  const processRawPdfs = async (items: { name: string; buffer: ArrayBuffer; size: number }[]) => {
+    const currentTotalFiles = uploadedFiles.length;
+    if (currentTotalFiles + items.length > MAX_FILES) {
+      alert(t.exceedMaxFiles);
+      return [];
+    }
+
+    const currentTotalBytes = uploadedFiles.reduce((acc, f) => acc + f.size, 0);
+    const newBytes = items.reduce((acc, f) => acc + f.size, 0);
+    if (currentTotalBytes + newBytes > MAX_TOTAL_SIZE_BYTES) {
+      alert(t.exceedMaxSize);
+      return [];
+    }
+
+    const newUploadedFiles: UploadedPdfFile[] = [];
+
+    for (const item of items) {
+      try {
+        const hash = await calculateSha256(item.buffer);
+        let pageCount = 0;
+        try {
+          const doc = await PDFDocument.load(item.buffer, { ignoreEncryption: true });
+          pageCount = doc.getPageCount();
+        } catch (pdfErr) {
+          console.warn('PDF page count failed for:', item.name, pdfErr);
+        }
+
+        const newId = `${item.name}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+        newUploadedFiles.push({
+          id: newId,
+          name: item.name,
+          size: item.size,
+          pageCount: pageCount || 1,
+          sha256: hash,
+          isDuplicate: false,
+          matchedRequirementId: null,
+          arrayBuffer: item.buffer,
+        });
+      } catch (err: any) {
+        console.error('Error processing file:', item.name, err);
+      }
+    }
+
+    const merged = updateDuplicates([...uploadedFiles, ...newUploadedFiles]);
+    setUploadedFiles(merged);
+    return merged;
+  };
+
+  // Load sample documents automatically on start so page is populated and working!
+  useEffect(() => {
+    const autoLoadInitialSample = async () => {
+      try {
+        setIsLoadingDemoDocs(true);
+        const items: { name: string; buffer: ArrayBuffer; size: number }[] = [];
+        for (const fname of SAMPLE_DOC_NAMES) {
+          const res = await fetch(`/sample-pack/documents/${encodeURIComponent(fname)}`);
+          if (res.ok) {
+            const buffer = await res.arrayBuffer();
+            items.push({ name: fname, buffer, size: buffer.byteLength });
+          }
+        }
+
+        if (items.length > 0) {
+          const uploaded = await processRawPdfs(items);
+          
+          // Pre-configure initial matches with valid documents
+          const initialMatches: Record<string, string | null> = {};
+          uploaded.forEach((f) => {
+            const fname = f.name.toLowerCase();
+            if (fname === 'trade_license_2026.pdf') initialMatches['R01'] = f.id;
+            else if (fname === '03_tin_certificate.pdf') initialMatches['R02'] = f.id;
+            else if (fname === '04_vat_certificate.pdf') initialMatches['R03'] = f.id;
+            else if (fname === 'bank_solvency.pdf') initialMatches['R04'] = f.id;
+            else if (fname === 'experience_cert.pdf') initialMatches['R05'] = f.id;
+            else if (fname === '02_technical_proposal.pdf') initialMatches['R08'] = f.id;
+            else if (fname === '01_financial_proposal.pdf') initialMatches['R09'] = f.id;
+            else if (fname === 'scan_0042.pdf') initialMatches['R10'] = f.id;
+          });
+
+          setMatches(initialMatches);
+          setExpiryDates({
+            R01: '2027-06-30',
+            R04: '2026-12-31',
+          });
+        }
+      } catch (err) {
+        console.info('Auto-load sample documents note:', err);
+      } finally {
+        setIsLoadingDemoDocs(false);
+      }
+    };
+
+    autoLoadInitialSample();
+  }, []);
+
+  // Handle requirements.json file selection from user
+  const handleJsonUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result as string;
+      if (content) parseRequirementsJson(content);
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  // Handle PDF file uploads from user
   const handlePdfUpload = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
 
     let nonPdfRejected = false;
-    const currentTotalFiles = uploadedFiles.length;
-    const incomingFiles: File[] = [];
+    const items: { name: string; buffer: ArrayBuffer; size: number }[] = [];
 
     for (let i = 0; i < fileList.length; i++) {
       const file = fileList[i];
@@ -134,64 +268,48 @@ export const App: React.FC = () => {
         nonPdfRejected = true;
         continue;
       }
-      incomingFiles.push(file);
+      const buffer = await file.arrayBuffer();
+      items.push({ name: file.name, buffer, size: file.size });
     }
 
     if (nonPdfRejected) {
       showToast(t.rejectNonPdf);
     }
 
-    if (currentTotalFiles + incomingFiles.length > MAX_FILES) {
-      alert(t.exceedMaxFiles);
-      return;
-    }
+    await processRawPdfs(items);
+  };
 
-    const currentTotalBytes = uploadedFiles.reduce((acc, f) => acc + f.size, 0);
-    const newBytes = incomingFiles.reduce((acc, f) => acc + f.size, 0);
-    if (currentTotalBytes + newBytes > MAX_TOTAL_SIZE_BYTES) {
-      alert(t.exceedMaxSize);
-      return;
-    }
+  // Manual reload of sample documents
+  const handleLoadSampleDocuments = async () => {
+    try {
+      setIsLoadingDemoDocs(true);
+      const items: { name: string; buffer: ArrayBuffer; size: number }[] = [];
 
-    const newUploadedFiles: UploadedPdfFile[] = [];
-
-    for (const file of incomingFiles) {
-      try {
-        const buffer = await file.arrayBuffer();
-        const hash = await calculateSha256(buffer);
-
-        let pageCount = 0;
-        try {
-          const doc = await PDFDocument.load(buffer, { ignoreEncryption: true });
-          pageCount = doc.getPageCount();
-        } catch (pdfErr) {
-          console.warn('PDF page count failed for:', file.name, pdfErr);
+      for (const fname of SAMPLE_DOC_NAMES) {
+        if (uploadedFiles.some((f) => f.name === fname)) continue;
+        const res = await fetch(`/sample-pack/documents/${encodeURIComponent(fname)}`);
+        if (res.ok) {
+          const buffer = await res.arrayBuffer();
+          items.push({ name: fname, buffer, size: buffer.byteLength });
         }
-
-        const newId = `${file.name}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-        newUploadedFiles.push({
-          id: newId,
-          name: file.name,
-          size: file.size,
-          pageCount: pageCount || 1,
-          sha256: hash,
-          isDuplicate: false,
-          matchedRequirementId: null,
-          arrayBuffer: buffer,
-        });
-      } catch (err: any) {
-        console.error('Error processing file:', file.name, err);
       }
-    }
 
-    const merged = updateDuplicates([...uploadedFiles, ...newUploadedFiles]);
-    setUploadedFiles(merged);
-    showToast(`Added ${newUploadedFiles.length} PDF file(s).`);
+      if (items.length > 0) {
+        await processRawPdfs(items);
+        showToast(`Loaded ${items.length} sample document(s).`);
+      } else {
+        showToast('Sample documents are already loaded.');
+      }
+    } catch (err: any) {
+      console.error('Failed to load sample documents:', err);
+      alert('Could not load sample documents: ' + err.message);
+    } finally {
+      setIsLoadingDemoDocs(false);
+    }
   };
 
   // Remove an uploaded file
   const handleRemoveFile = (fileId: string) => {
-    // Unmatch any requirement mapped to this file
     setMatches((prev) => {
       const next = { ...prev };
       Object.keys(next).forEach((reqId) => {
@@ -208,16 +326,14 @@ export const App: React.FC = () => {
   // Match a requirement to a file
   const handleMatch = (requirementId: string, fileId: string | null) => {
     if (!fileId) {
-      // Unmatch
       setMatches((prev) => ({ ...prev, [requirementId]: null }));
       setGeneratedPdfBlobUrl(null);
       return;
     }
 
-    // Check if this file is a duplicate of an already matched file
+    // Check duplicate assignment
     const targetFile = uploadedFiles.find((f) => f.id === fileId);
     if (targetFile?.isDuplicate) {
-      // Check if another copy of this same duplicate hash is already matched to another requirement
       const duplicateAlreadyAssignedToOther = Object.entries(matches).find(([otherReqId, assignedFileId]) => {
         if (!assignedFileId || otherReqId === requirementId) return false;
         const otherFile = uploadedFiles.find((f) => f.id === assignedFileId);
@@ -230,7 +346,7 @@ export const App: React.FC = () => {
       }
     }
 
-    // Ensure one-to-one mapping: remove file from any other requirement
+    // Ensure 1-to-1 mapping
     setMatches((prev) => {
       const next = { ...prev };
       Object.keys(next).forEach((k) => {
@@ -250,15 +366,12 @@ export const App: React.FC = () => {
     let matchCount = 0;
 
     requirements.forEach((req) => {
-      if (newMatches[req.id]) return; // already matched
+      if (newMatches[req.id]) return;
 
-      // Try to find unmatched, non-duplicate (or first valid duplicate) file
       const candidate = uploadedFiles.find((f) => {
-        // Must not be matched yet
         if (Object.values(newMatches).includes(f.id)) return false;
 
         const fname = f.name.toLowerCase();
-        // Priority rules for sample pack & standard tenders
         if (req.id.toUpperCase() === 'R01') {
           return fname.includes('trade_license_2026') || fname.includes('trade_license');
         }
@@ -274,7 +387,6 @@ export const App: React.FC = () => {
         if (req.id.toUpperCase() === 'R09') return fname.includes('financial');
         if (req.id.toUpperCase() === 'R10') return fname.includes('declaration') || fname.includes('scan_0042');
 
-        // Generic matching
         const words = req.title_en.toLowerCase().split(' ').filter((w) => w.length > 3);
         return words.some((w) => fname.includes(w));
       });
@@ -289,13 +401,45 @@ export const App: React.FC = () => {
     showToast(`Auto-matched ${matchCount} document(s).`);
   };
 
+  // Auto-Match and Pre-fill Valid Dates for 1-click end-to-end testing
+  const handleAutoMatchAndFillDates = () => {
+    handleAutoMatch();
+    setExpiryDates((prev) => ({
+      ...prev,
+      R01: '2027-06-30',
+      R04: '2026-12-31',
+    }));
+    showToast('Auto-matched documents and filled valid expiry dates.');
+  };
+
+  // Reset all state to allow testing from scratch
+  const handleResetAll = () => {
+    setTender(null);
+    setRequirements([]);
+    setUploadedFiles([]);
+    setMatches({});
+    setExpiryDates({});
+    setGeneratedPdfBlobUrl(null);
+    showToast('Cleared all state. Ready for fresh upload.');
+  };
+
+  // Reload default sample tender
+  const handleReloadSampleTender = () => {
+    setTender(DEFAULT_TENDER);
+    setRequirements(DEFAULT_REQUIREMENTS);
+    setMatches({});
+    setExpiryDates({});
+    setGeneratedPdfBlobUrl(null);
+    showToast('Reloaded sample tender T-2026-0417.');
+  };
+
   // Set expiry date for a requirement
   const handleExpiryChange = (requirementId: string, date: string) => {
     setExpiryDates((prev) => ({ ...prev, [requirementId]: date }));
     setGeneratedPdfBlobUrl(null);
   };
 
-  // Recalculate requirement states whenever matches, expiry, or tender deadline changes
+  // Recalculate requirement states
   const requirementStates = useMemo(() => {
     if (!tender) return [];
     return computeAllRequirementStates(requirements, matches, expiryDates, tender.submission_deadline);
@@ -332,10 +476,9 @@ export const App: React.FC = () => {
     try {
       setIsGenerating(true);
 
-      // Build ordered items list
       const includedItems: IncludedDocumentItem[] = [];
       requirementStates.forEach((state) => {
-        if (!state.matchedFileId) return; // skip optional not provided
+        if (!state.matchedFileId) return;
         const file = uploadedFiles.find((f) => f.id === state.matchedFileId);
         if (file) {
           includedItems.push({
@@ -350,7 +493,6 @@ export const App: React.FC = () => {
       const blob = new Blob([pdfBytes], { type: 'application/pdf' });
       const blobUrl = URL.createObjectURL(blob);
 
-      // Count pages in generated PDF
       const generatedDoc = await PDFDocument.load(pdfBytes);
       const totalPages = generatedDoc.getPageCount();
 
@@ -377,21 +519,6 @@ export const App: React.FC = () => {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-  };
-
-  // Quick load sample-pack button for testing / evaluation
-  const handleLoadSamplePack = async () => {
-    try {
-      const response = await fetch('/sample-pack/requirements.json');
-      if (!response.ok) {
-        throw new Error('Could not automatically fetch sample-pack/requirements.json');
-      }
-      const text = await response.text();
-      parseRequirementsJson(text);
-    } catch {
-      // Trigger file picker
-      jsonInputRef.current?.click();
-    }
   };
 
   // Render Status Badge
@@ -449,15 +576,85 @@ export const App: React.FC = () => {
           </div>
         </div>
 
-        <button 
-          className="lang-btn" 
-          onClick={() => setLang(lang === 'en' ? 'bn' : 'en')}
-          title="Toggle Language"
-        >
-          <Languages size={16} />
-          <span>{t.switchLanguage}</span>
-        </button>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+          <button 
+            className="lang-btn" 
+            onClick={() => setLang(lang === 'en' ? 'bn' : 'en')}
+            title="Toggle Language"
+          >
+            <Languages size={16} />
+            <span>{t.switchLanguage}</span>
+          </button>
+        </div>
       </header>
+
+      {/* Quick Demo Bar */}
+      <div style={{ 
+        background: '#eff6ff', 
+        border: '1px solid #bfdbfe', 
+        borderRadius: '12px', 
+        padding: '14px 18px', 
+        marginBottom: '20px', 
+        display: 'flex', 
+        justifyContent: 'space-between', 
+        alignItems: 'center', 
+        flexWrap: 'wrap', 
+        gap: '12px' 
+      }}>
+        <div>
+          <div style={{ fontSize: '14px', fontWeight: 700, color: '#1e40af', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Zap size={16} color="#2563eb" />
+            <span>{t.demoBannerTitle}</span>
+          </div>
+          <div style={{ fontSize: '12px', color: '#3b82f6', marginTop: '2px' }}>
+            {t.demoBannerDesc}
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+          <button 
+            className="lang-btn"
+            style={{ background: '#ffffff', color: '#1d4ed8', borderColor: '#bfdbfe' }}
+            disabled={isLoadingDemoDocs}
+            onClick={handleLoadSampleDocuments}
+          >
+            <FolderOpen size={14} color="#1d4ed8" />
+            <span>{isLoadingDemoDocs ? t.loadingSampleDocs : t.loadSampleDocsBtn}</span>
+          </button>
+
+          {uploadedFiles.length > 0 && requirements.length > 0 && (
+            <button 
+              className="lang-btn"
+              style={{ background: '#1d4ed8', color: '#ffffff', borderColor: '#1d4ed8' }}
+              onClick={handleAutoMatchAndFillDates}
+            >
+              <Sparkles size={14} color="#ffffff" />
+              <span>{t.autoMatchAndFillBtn}</span>
+            </button>
+          )}
+
+          {tender ? (
+            <button 
+              className="lang-btn"
+              style={{ background: '#ffffff', color: '#64748b', borderColor: '#cbd5e1' }}
+              onClick={handleResetAll}
+              title={t.resetBtn}
+            >
+              <RotateCcw size={14} />
+              <span>{t.resetBtn}</span>
+            </button>
+          ) : (
+            <button 
+              className="lang-btn"
+              style={{ background: '#ffffff', color: '#1d4ed8', borderColor: '#bfdbfe' }}
+              onClick={handleReloadSampleTender}
+            >
+              <FolderOpen size={14} />
+              <span>Reload Sample Pack</span>
+            </button>
+          )}
+        </div>
+      </div>
 
       {/* 1. Tender Section */}
       <section className="card-section">
@@ -696,7 +893,6 @@ export const App: React.FC = () => {
                 {requirementStates.map((state) => {
                   const req = state.requirement;
                   const reqTitle = lang === 'bn' ? req.title_bn : req.title_en;
-                  const matchedFile = uploadedFiles.find((f) => f.id === state.matchedFileId);
 
                   return (
                     <tr key={req.id}>
